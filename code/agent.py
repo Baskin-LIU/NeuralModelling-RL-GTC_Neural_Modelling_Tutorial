@@ -88,6 +88,8 @@ class DynaAgent(Environment):
 
         # complete the code
 
+        self.experience_buffer[s*self.num_actions+a] = [s, a.item(), r.item(), s1]
+
         return None
 
     def _update_qvals(self, s, a, r, s1, bonus=False):
@@ -103,6 +105,7 @@ class DynaAgent(Environment):
         '''
 
         # complete the code
+        self.Q[s, a] = self.Q[s, a] + self.alpha*(r+self.gamma*np.max(self.Q[s1]) - self.Q[s, a])
 
         return None
 
@@ -115,7 +118,8 @@ class DynaAgent(Environment):
             s  -- initial state
             a  -- chosen action
         '''
-
+        self.action_count += 1
+        self.action_count[s, a] = 0
         # complete the code
 
         return None
@@ -131,7 +135,7 @@ class DynaAgent(Environment):
             s1    -- next state
         '''
 
-        self.history = np.vstack((self.history, np.array([s, a, r, s1])))
+        self.history = np.vstack((self.history, np.array([s, a.item(), r.item(), s1])))
 
         return None
 
@@ -146,8 +150,14 @@ class DynaAgent(Environment):
         '''
 
         # complete the code
-
-        return None
+        #ex = np.exp(10*self.Q[s])
+        #p = ex/np.sum(ex)
+        #a = np.random.choice(self.num_actions, 1, p=p)
+        Q = self.Q[s]# + self.epsilon*(self.action_count[s]**0.5)
+        v = np.max(Q)
+        alist = np.squeeze(np.argwhere(Q==v), axis=1)
+        a = np.random.choice(alist,1)
+        return a
 
     def _plan(self, num_planning_updates):
 
@@ -158,6 +168,16 @@ class DynaAgent(Environment):
         '''
 
         # complete the code
+        visited_s = np.unique(self.history[:, 0])
+        for i in range(num_planning_updates):
+            #s = np.random.choice(visited_s)
+            s = np.random.choice(self.num_states)
+            #if s not in visited_s: continue
+            #taken_a = np.unique(self.history[self.history[:, 0] == s, 1])
+            a = np.random.choice(self.num_actions)
+            _, _, r, s1 = self.experience_buffer[s*self.num_actions+a]
+            self.Q[s, a] = self.Q[s, a] + self.alpha*(r+self.gamma*np.max(self.Q[s1])
+                                    +self.epsilon*(self.action_count[s, a]**0.5) - self.Q[s, a])
 
         return None
 
@@ -192,7 +212,7 @@ class DynaAgent(Environment):
             # choose action
             a  = self._policy(self.s)
             # get new state
-            s1 = np.random.choice(np.arange(self.num_states), p=self.T[self.s, a, :])
+            s1 = np.random.choice(np.arange(self.num_states), p=self.T[self.s, a, :].squeeze())
             # receive reward
             r  = self.R[self.s, a]
             # learning
@@ -211,6 +231,8 @@ class DynaAgent(Environment):
                 self.s = self.start_state
             else:
                 self.s = s1
+
+            #print(self.Q)
 
         return None
     
@@ -237,6 +259,11 @@ class TwoStepAgent:
         self.lam    = lam
         self.w      = w
         self.p      = p
+        
+
+        self.start_state = 0
+        self.T = np.array([[0.7, 0.3], [0.3, 0.7]])
+        self._init_history()
 
         return None
         
@@ -263,6 +290,28 @@ class TwoStepAgent:
         self.history = np.vstack((self.history, [a, s1, r1]))
 
         return None
+    
+    def _policy(self, s):
+
+        '''
+        Agent's policy 
+        Input arguments:
+            s -- state
+        Output:
+            a -- index of action to be chosen
+        '''
+
+        # complete the code
+        if s==0:
+            #print(self.prev_a)
+            ex = np.exp(self.beta1*(self.Qnet + self.p*self.prev_a))
+        else:
+            ex = np.exp(self.beta2*self.Q[s])
+ 
+        p = ex/np.sum(ex)
+        a = np.random.choice(2, 1, p=p)
+
+        return a
     
     def get_stay_probabilities(self):
 
@@ -316,5 +365,50 @@ class TwoStepAgent:
         '''
             
         # complete the code
+        self.Q = np.zeros((3, 2))
+        self.Qmb = np.zeros(2)
+        self.Qnet = np.zeros(2)
+        self.account = np.zeros(2)
+        self.T_learn = np.array([[0.7, 0.3], [0.3, 0.7]])
+        self.prev_a = np.zeros(2)
+        self.R = np.full((2,2), 0.5)
+
+        for _ in range(num_trials):
+
+            # choose action
+            a = self._policy(0)
+            # get new state
+            s1 = np.random.choice(2, p=self.T[a, :].squeeze()) + 1
+            a1 = self._policy(s1)
+            # receive reward
+            r = (np.random.random() <= self.R[s1-1, a1])
+            # learning
+            delta = r - self.Q[s1, a1]
+            self.Q[0, a] = self.Q[0, a] + self.alpha1 * (self.Q[s1, a1] - self.Q[0, a])
+            self.Q[s1, a1] = self.Q[s1, a1] + self.alpha2 * delta
+            self.Q[0, a] = self.Q[0, a] + self.alpha1 * self.lam * delta
+            
+            if (a==0 and s1 ==1) or (a==1 and s1==2):
+                self.account[0] +=1
+            else:
+                self.account[1] +=1                
+            if self.account[0] >= self.account[1]:
+                self.T_learn = np.array([[0.7, 0.3], [0.3, 0.7]])
+            else:
+                self.T_learn = np.array([[0.3, 0.7], [0.7, 0.3]])
+            for j in [0, 1]:               
+                self.Qmb[j] = self.T_learn[j, 0] * np.max(self.Q[1]) + self.T_learn[j, 1] * np.max(self.Q[2])            
+                self.Qnet[j] = self.w*self.Qmb[j] + (1-self.w)*self.Q[0, j]
+            
+                 
+            # update history
+            
+            self._update_history(a.item(), s1, r.item())
+            self.prev_a = np.zeros(2)
+            self.prev_a[a]=1
+
+            self.R += np.random.normal(0, 0.025, size = [2, 2])
+            self.R[self.R > 0.75] = 0.75
+            self.R[self.R < 0.25] = 0.25
 
         return None
